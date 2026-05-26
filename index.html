@@ -285,7 +285,7 @@ tbody tr:hover{background:rgba(255,255,255,.02);}
     <span id="liveStatusText">Ładowanie...</span>
     <span id="countdownText" style="margin-left:8px;color:var(--muted);font-size:11px"></span>
   </div>
-  <button class="btn" id="refreshBtn" onclick="loadAll()">↺ Odśwież</button>
+  <button class="btn" id="refreshBtn" onclick="clearAllCache(); loadAll()">↺ Odśwież</button>
 </header>
 
 <!-- LOADING BAR -->
@@ -862,6 +862,56 @@ function perfClass(factTotal, planTotal) {
 }
 
 // ══════════════════════════════════════════════
+// CACHE (localStorage, past months = forever)
+// ══════════════════════════════════════════════
+const CACHE_NS = 'evamats_v2_';
+function saveMonthCache(year, month, data) {
+  try {
+    const store = JSON.parse(localStorage.getItem(CACHE_NS + year) || '{}');
+    store[pad(month)] = data;
+    localStorage.setItem(CACHE_NS + year, JSON.stringify(store));
+  } catch(e) {}
+}
+function loadMonthCache(year, month) {
+  try {
+    const store = JSON.parse(localStorage.getItem(CACHE_NS + year) || '{}');
+    return store[pad(month)] || null;
+  } catch(e) { return null; }
+}
+function clearAllCache() {
+  for (const k of Object.keys(localStorage)) {
+    if (k.startsWith(CACHE_NS)) localStorage.removeItem(k);
+  }
+}
+function mergeIntoCache(cached, freshDays) {
+  const daily = { ...cached.daily, ...freshDays.daily };
+  let shopify=0, sales=0, revenue=0, prod=0;
+  for (const v of Object.values(daily)) {
+    shopify += v.shopify||0; sales += v.sales||0;
+    revenue += (v.shRev||0)+(v.dsRev||0); prod += v.prod||0;
+  }
+  return { daily, shopify, sales, prod, revenue };
+}
+async function fetchMonthWithCache(year, month, isCurrent) {
+  const cached = loadMonthCache(year, month);
+  if (!isCurrent && cached) return cached;
+  if (isCurrent && cached) {
+    // Fetch only last 3 days and merge into cache
+    const today = new Date();
+    const d3 = new Date(today); d3.setDate(today.getDate() - 2);
+    const fromStr = isoDate(d3.getFullYear(), d3.getMonth()+1, d3.getDate());
+    const fresh = await fetchMonthFactDaily(year, month, fromStr);
+    const merged = mergeIntoCache(cached, fresh);
+    saveMonthCache(year, month, merged);
+    return merged;
+  }
+  // No cache — fetch full month and save
+  const full = await fetchMonthFactDaily(year, month);
+  saveMonthCache(year, month, full);
+  return full;
+}
+
+// ══════════════════════════════════════════════
 // PROGRESS / STATUS
 // ══════════════════════════════════════════════
 function setProgress(p) {
@@ -977,8 +1027,8 @@ async function bitrixBatch(cmds) {
   };
 }
 
-async function fetchMonthFactDaily(year, month) {
-  const from = `${year}-${pad(month)}-01`;
+async function fetchMonthFactDaily(year, month, fromOverride) {
+  const from = fromOverride || `${year}-${pad(month)}-01`;
   const to   = month === 12 ? `${year+1}-01-01` : `${year}-${pad(month+1)}-01`;
   const pf = CFG.f.payDate, sf = CFG.f.shipDate;
 
@@ -1607,12 +1657,12 @@ async function loadAll() {
     renderOverviewKPIs(); renderOverviewTable(); renderOverviewCharts();
     if (document.getElementById('tab-daily').classList.contains('active')) renderDailyTab();
 
-    // Step 2 — Bitrix live: current month first so user sees correct numbers fast
+    // Step 2 — Bitrix live: current month (last 3 days if cached, else full)
     const s2 = addStatus('chip-load', `⏳ Bitrix24 — ${MPL[curM-1]}...`);
     document.getElementById('liveStatusText').innerHTML = '<span class="spinner"></span> Bitrix24...';
     setLoadingMsg(`Pobieranie danych — ${MPL[curM-1]}...`);
     try {
-      const live = await fetchMonthFactDaily(curY, curM);
+      const live = await fetchMonthWithCache(curY, curM, true);
       liveFactData[`${curY}-${pad(curM)}`] = live;
       injectLiveData(live, curY, curM);
       s2.remove();
@@ -1624,17 +1674,20 @@ async function loadAll() {
       s2.remove(); addStatus('chip-err', `⚠ Bitrix ${MPL[curM-1]}: ${e.message}`);
     }
 
-    // Step 3 — Past months from Bitrix (replaces stale Google Sheets fact data)
+    // Step 3 — Past months: from cache if available, else fetch full month
     if (curM > 1) {
-      const s3 = addStatus('chip-load', `⏳ Bitrix24 — historia...`);
+      const s3 = addStatus('chip-load', `⏳ Historia...`);
       const pastMonths = curM - 1;
       for (let m = curM - 1; m >= 1; m--) {
-        setLoadingMsg(`Pobieranie historii — ${MPL[m-1]} (${curM-m}/${pastMonths})...`);
+        const hasCached = !!loadMonthCache(curY, m);
+        setLoadingMsg(hasCached
+          ? `Z pamięci podręcznej — ${MPL[m-1]}...`
+          : `Pobieranie historii — ${MPL[m-1]} (${curM-m}/${pastMonths})...`);
         try {
-          const live = await fetchMonthFactDaily(curY, m);
+          const live = await fetchMonthWithCache(curY, m, false);
           liveFactData[`${curY}-${pad(m)}`] = live;
           injectLiveData(live, curY, m);
-          s3.textContent = `⏳ Bitrix24 — ${MPL[m-1]} ✓`;
+          s3.textContent = `⏳ Historia — ${MPL[m-1]} ✓`;
           const pct = 60 + Math.round((curM - m) / pastMonths * 38);
           setProgress(pct);
           renderOverviewKPIs(); renderOverviewTable(); renderOverviewCharts();
