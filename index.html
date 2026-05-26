@@ -245,9 +245,35 @@ tbody tr:hover{background:rgba(255,255,255,.02);}
 .help-divider{border:none;border-top:1px solid var(--border);margin:6px 0 14px;}
 .help-warn{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);
   border-radius:8px;padding:10px 14px;font-size:12px;color:var(--muted2);line-height:1.6;margin-top:10px;}
+
+/* ── LOAD OVERLAY ── */
+#loadOverlay{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;
+  justify-content:center;z-index:9999;transition:opacity .5s;}
+#loadOverlay.hidden{opacity:0;pointer-events:none;}
+.lov-box{text-align:center;width:360px;padding:0 20px;}
+.lov-logo{font-size:34px;font-weight:800;color:var(--green);letter-spacing:2px;margin-bottom:8px;}
+.lov-sub{font-size:12px;color:var(--muted);margin-bottom:36px;letter-spacing:.5px;}
+.lov-msg{font-size:13px;color:var(--muted2);margin-bottom:14px;min-height:20px;}
+.lov-bar-wrap{height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:10px;}
+.lov-bar-fill{height:100%;background:linear-gradient(90deg,var(--green),var(--blue));
+  border-radius:3px;width:0%;transition:width .4s ease;}
+.lov-pct{font-size:28px;font-weight:700;color:var(--text);margin-top:8px;}
+.lov-hint{font-size:11px;color:var(--muted);margin-top:10px;}
 </style>
 </head>
 <body>
+
+<!-- LOAD OVERLAY -->
+<div id="loadOverlay">
+  <div class="lov-box">
+    <div class="lov-logo">EVAMATS</div>
+    <div class="lov-sub">Plan Sprzedaży 2026</div>
+    <div class="lov-msg" id="lovMsg">Łączenie z bazą danych...</div>
+    <div class="lov-bar-wrap"><div class="lov-bar-fill" id="lovFill"></div></div>
+    <div class="lov-pct" id="lovPct">0%</div>
+    <div class="lov-hint">Pobieramy dane na żywo z Bitrix24</div>
+  </div>
+</div>
 
 <!-- HEADER -->
 <header>
@@ -839,10 +865,31 @@ function perfClass(factTotal, planTotal) {
 // PROGRESS / STATUS
 // ══════════════════════════════════════════════
 function setProgress(p) {
-  const bar  = document.getElementById('loadingBar');
-  const fill = document.getElementById('loadingFill');
-  if(p>=100){ fill.style.width='100%'; setTimeout(()=>{bar.style.display='none';fill.style.width='0%';},400); }
-  else { bar.style.display='block'; fill.style.width=p+'%'; }
+  const bar     = document.getElementById('loadingBar');
+  const fill    = document.getElementById('loadingFill');
+  const overlay = document.getElementById('loadOverlay');
+  const lovFill = document.getElementById('lovFill');
+  const lovPct  = document.getElementById('lovPct');
+
+  if (lovFill) lovFill.style.width = p + '%';
+  if (lovPct)  lovPct.textContent  = Math.round(p) + '%';
+
+  if (p >= 100) {
+    fill.style.width = '100%';
+    setTimeout(() => {
+      bar.style.display = 'none';
+      fill.style.width  = '0%';
+      if (overlay) overlay.classList.add('hidden');
+    }, 600);
+  } else {
+    bar.style.display = 'block';
+    fill.style.width  = p + '%';
+    if (overlay) overlay.classList.remove('hidden');
+  }
+}
+function setLoadingMsg(text) {
+  const el = document.getElementById('lovMsg');
+  if (el) el.textContent = text;
 }
 function addStatus(type, text) {
   const row = document.getElementById('statusRow');
@@ -1542,6 +1589,7 @@ async function loadAll() {
 
   try {
     // Step 1 — Google Sheets: plan + initial fact (monthly + daily in parallel)
+    setLoadingMsg('Pobieranie planu z Google Sheets...');
     const s1 = addStatus('chip-load', '⏳ Google Sheets...');
     [monthlyData, dailyData] = await Promise.all([loadMonthlySheet(), loadDailySheet()]);
     s1.remove(); addStatus('chip-ok', `✓ Plan (${dailyData.length} dni)`);
@@ -1562,6 +1610,7 @@ async function loadAll() {
     // Step 2 — Bitrix live: current month first so user sees correct numbers fast
     const s2 = addStatus('chip-load', `⏳ Bitrix24 — ${MPL[curM-1]}...`);
     document.getElementById('liveStatusText').innerHTML = '<span class="spinner"></span> Bitrix24...';
+    setLoadingMsg(`Pobieranie danych — ${MPL[curM-1]}...`);
     try {
       const live = await fetchMonthFactDaily(curY, curM);
       liveFactData[`${curY}-${pad(curM)}`] = live;
@@ -1578,12 +1627,16 @@ async function loadAll() {
     // Step 3 — Past months from Bitrix (replaces stale Google Sheets fact data)
     if (curM > 1) {
       const s3 = addStatus('chip-load', `⏳ Bitrix24 — historia...`);
+      const pastMonths = curM - 1;
       for (let m = curM - 1; m >= 1; m--) {
+        setLoadingMsg(`Pobieranie historii — ${MPL[m-1]} (${curM-m}/${pastMonths})...`);
         try {
           const live = await fetchMonthFactDaily(curY, m);
           liveFactData[`${curY}-${pad(m)}`] = live;
           injectLiveData(live, curY, m);
           s3.textContent = `⏳ Bitrix24 — ${MPL[m-1]} ✓`;
+          const pct = 60 + Math.round((curM - m) / pastMonths * 38);
+          setProgress(pct);
           renderOverviewKPIs(); renderOverviewTable(); renderOverviewCharts();
         } catch(e) {
           console.warn(`Bitrix month ${m} error:`, e);
