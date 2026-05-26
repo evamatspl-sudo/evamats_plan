@@ -786,6 +786,7 @@ const CFG = {
     payDate:  'UF_CRM_1676999369',
     shipDate: 'UF_CRM_1677492879',
     respUser: 'UF_CRM_1778884282',
+    orderNum: 'UF_CRM_1706355079',
     revenue:  'OPPORTUNITY',
   },
   shopifyUsers: new Set(['49948', '2']),
@@ -935,7 +936,7 @@ async function fetchMonthFactDaily(year, month) {
   const pf = CFG.f.payDate, sf = CFG.f.shipDate;
 
   const salesQ = `crm.deal.list?filter%5B%3E%3D${pf}%5D=${from}&filter%5B%3C${pf}%5D=${to}`
-               + `&select%5B0%5D=${CFG.f.respUser}&select%5B1%5D=${CFG.f.revenue}&select%5B2%5D=${pf}`;
+               + `&select%5B0%5D=${CFG.f.respUser}&select%5B1%5D=${CFG.f.revenue}&select%5B2%5D=${pf}&select%5B3%5D=${CFG.f.orderNum}`;
   const prodQ  = `crm.deal.list?filter%5B%3E%3D${sf}%5D=${from}&filter%5B%3C${sf}%5D=${to}`
                + `&select%5B0%5D=ID&select%5B1%5D=${sf}`;
 
@@ -975,8 +976,11 @@ async function fetchMonthFactDaily(year, month) {
     if (!daily[ds]) daily[ds] = {shopify:0, sales:0, shRev:0, dsRev:0, prod:0};
     const ru  = d[CFG.f.respUser];
     const rev = parseFloat(d[CFG.f.revenue]||0);
-    if (CFG.shopifyUsers.has(String(ru))) { daily[ds].shopify++; daily[ds].shRev += rev; }
-    else                                  { daily[ds].sales++;   daily[ds].dsRev += rev; }
+    const isShopify = (ru != null && ru !== '')
+      ? CFG.shopifyUsers.has(String(ru))
+      : (d[CFG.f.orderNum]||'').startsWith('S');
+    if (isShopify) { daily[ds].shopify++; daily[ds].shRev += rev; }
+    else           { daily[ds].sales++;   daily[ds].dsRev += rev; }
   }
   for (const d of allProd) {
     const ds = dayKey(d, CFG.f.shipDate);
